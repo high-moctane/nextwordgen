@@ -1,5 +1,5 @@
 [package]
-name = "nextword-data-generator"
+name = "nextwordgen"
 version = "0.1.0"
 authors = ["high-moctane <high.moctane@gmail.com>"]
 edition = "2018"
