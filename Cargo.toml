@@ -1,7 +1,9 @@
 [package]
 name = "nextwordgen"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["high-moctane <high.moctane@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+# reqwest = "0.9.5"
+flate2 = "1.0.6"

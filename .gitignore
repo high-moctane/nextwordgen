@@ -1,2 +1,7 @@
 /target
 **/*.rs.bk
+
+# archive files
+*.gz
+*.xz
+*.txt

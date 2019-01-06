@@ -1,3 +1,5 @@
+use nextwordgen::download;
+
 fn main() {
-    println!("Hello, world!");
+    download::run();
 }
