@@ -6,243 +6,198 @@ use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::io::prelude::*;
+use std::io::BufRead;
 use std::io::BufReader;
 use std::io::BufWriter;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
 
-const READ_LINES_COUNT: i32 = 100;
+const READ_LINES_NUM: u32 = 100;
 
 pub fn run() {
+    // let r = read_gz(Path::new("short.txt.gz"));
+    // let mut w = write_gz(Path::new("testtest.txt.gz"));
+    // for line in r.lines() {
+    //     // writeln!(w, "{}", line.unwrap()).unwrap();
+    // }
+
     let src = Path::new("short.txt.gz");
-    let dstdir = Path::new("dst");
-    fs::create_dir(dstdir).unwrap();
-
-    read_raw_data(&src, &dstdir);
-
-    println!("done.");
-
-    merge_dir(&dstdir);
+    let dst_dir = Path::new("./dst");
+    fs::create_dir(dst_dir).unwrap();
+    count_data(&src, &dst_dir);
 }
 
-/// Reads raw data and dump into multiple files.
-fn read_raw_data(src: &Path, dstdir: &Path) {
-    let src_f = File::open(src).unwrap();
-    let src_f = BufReader::new(src_f);
-    let src_f = GzDecoder::new(src_f);
-    let mut lines = BufReader::new(src_f).lines();
+/// open *.gz file
+fn read_gz(path: &Path) -> BufReader<GzDecoder<BufReader<File>>> {
+    let f = File::open(path).unwrap();
+    let r = BufReader::new(f);
+    let decoder = GzDecoder::new(r);
+    BufReader::new(decoder)
+}
 
-    let mut file_cnt = 0;
-    'read_loop: loop {
-        let dstfile = dstdir.to_path_buf().join(&format!("{}.gz", file_cnt));
-        let dstfile = File::create(dstfile).unwrap();
-        let dstfile = GzEncoder::new(dstfile, Compression::default());
-        let mut dstfile = BufWriter::new(dstfile);
+/// create *.gz file
+fn write_gz(path: &Path) -> BufWriter<GzEncoder<BufWriter<File>>> {
+    let f = File::create(path).unwrap();
+    let w = BufWriter::new(f);
+    let encoder = GzEncoder::new(w, Compression::best());
+    BufWriter::new(encoder)
+}
 
-        let mut counter = EntryCounter::new();
+fn count_data(src: &Path, dst_dir: &Path) {
+    let r = read_gz(src);
 
-        for _ in 0..READ_LINES_COUNT {
+    let mut entry_counter = EntryCounter::new();
+
+    let mut file_num: u32 = 0;
+
+    let mut lines = r.lines();
+
+    loop {
+        let mut dst_path = dst_dir.to_path_buf();
+        dst_path.push(&format!("{:010}.gz", file_num));
+        let mut w = write_gz(&dst_path);
+
+        for _ in 0..READ_LINES_NUM {
             match lines.next() {
-                Some(result) => {
-                    counter.add_from_str(&result.unwrap());
-                }
+                Some(result) => match result {
+                    Ok(line) => match Entry::from_raw_line(&line) {
+                        Some(entry) => entry_counter.add(&entry),
+                        None => continue,
+                    },
+                    Err(err) => panic!(err),
+                },
                 None => {
-                    counter.dump(&mut dstfile).unwrap();
-                    dstfile.flush().unwrap();
-                    break 'read_loop;
+                    entry_counter.dump(&mut w);
+                    return;
                 }
             }
         }
 
-        counter.dump(&mut dstfile).unwrap();
-        dstfile.flush().unwrap();
-        file_cnt += 1;
+        entry_counter.dump(&mut w);
+
+        file_num += 1;
     }
 }
 
-/// merge two files into dst.
-/// FIXME
-fn merge_files(src1: &Path, src2: &Path, dst: &Path) {
-    let src1_f = File::open(src1).unwrap();
-    let src1_f = BufReader::new(src1_f);
-    let src1_f = GzDecoder::new(src1_f);
-    let mut lines1 = BufReader::new(src1_f).lines();
+fn merge_two_files(src1: &Path, src2: &Path, dst_dir: &Path) {
+    let r1 = read_gz(src1);
+    let r2 = read_gz(src2);
 
-    let src2_f = File::open(src2).unwrap();
-    let src2_f = BufReader::new(src2_f);
-    let src2_f = GzDecoder::new(src2_f);
-    let mut lines2 = BufReader::new(src2_f).lines();
+    let mut lines1 = r1.lines();
+    let mut lines2 = r2.lines();
 
-    let dst_f = File::create(dst).unwrap();
-    let dst_f = GzEncoder::new(dst_f, Compression::default());
-    let mut dst_f = BufWriter::new(dst_f);
+    let mut w = write_gz(dst_dir);
 
-    let mut update_entry1 = || match lines1.next() {
-        Some(result) => match result {
-            Ok(s) => Entry::new(&s),
-            Err(err) => panic!(err),
-        },
-        None => None,
-    };
-    let mut update_entry2 = || match lines2.next() {
-        Some(result) => match result {
-            Ok(s) => Entry::new(&s),
-            Err(err) => panic!(err),
-        },
-        None => None,
-    };
+    let mut line1 = lines1.next();
+    let mut line2 = lines2.next();
 
-    let mut entry1 = update_entry1();
-    let mut entry2 = update_entry2();
+    let mut entry1 = Entry::from_raw_line(&line1.unwrap().unwrap());
+    let mut entry2 = Entry::from_raw_line(&line1.unwrap().unwrap());
 
     loop {
-        if entry1.is_none() && entry2.is_none() {
-            dst_f.flush().unwrap();
-            return;
-        } else if entry2.is_none() {
-            writeln!(dst_f, "{}", entry1.unwrap()).unwrap();
-            entry1 = update_entry1();
-        } else if entry1.is_none() {
-            writeln!(dst_f, "{}", entry2.unwrap()).unwrap();
-            entry2 = update_entry1();
-        } else if &entry1.unwrap().ngram < entry2.unwrap().ngram {
-            writeln!(dst_f, "{}", entry1.unwrap()).unwrap();
-            entry1 = update_entry1();
-        }
-    }
-}
-
-fn merge_dir(dir: &Path) {
-    loop {
-        thread::sleep(Duration::from_secs(1));
-
-        let mut all_files: Vec<PathBuf> = fs::read_dir(dir)
-            .unwrap()
-            .map(|result| result.unwrap().path())
-            .collect();
-
-        all_files.sort_by(|a, b| file_name_num(b).cmp(&file_name_num(a)));
-
-        if all_files.len() < 2 {
+        if line1.is_none() && line2.is_none() {
             return;
         }
 
-        for two_files in all_files.chunks(2) {
-            if two_files.len() < 2 {
-                break;
-            }
-
-            let file_num = (file_name_num(&two_files[0]) + 1).to_string();
-            let mut file_name = PathBuf::from(two_files[0].parent().unwrap());
-            file_name.push(&format!("{}.gz", file_num));
-            merge_files(&two_files[0], &two_files[1], &Path::new(&file_name));
-
-            fs::remove_file(&two_files[0]).unwrap();
-            fs::remove_file(&two_files[1]).unwrap();
-        }
+        if line2.is_none() {}
     }
 }
 
-fn file_name_num(path: &Path) -> i32 {
-    path.file_stem()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .parse::<i32>()
-        .unwrap()
-}
+fn dump_line(w: &mut io::Write, line: &str) {}
 
-/// Entry has a pair of n-gram wors and match count.
-#[derive(Debug, PartialEq)]
+/// The entry is a struct of each line of data.
+#[derive(Debug)]
 struct Entry {
-    ngram: String,
+    ngram: Vec<String>,
     match_count: u128,
 }
 
 impl Entry {
-    /// Parses s (n-gram line) into Entry.
-    fn new(s: &str) -> Option<Entry> {
-        let mut s_iter = s.split("\t");
+    /// Reads from a line of data.
+    fn from_raw_line(line: &str) -> Option<Entry> {
+        let mut elems = line.split("\t");
 
-        let mut ngram = vec![];
-        for word in s_iter.next().unwrap().split(" ") {
-            match Entry::valid_ngram_elem(word) {
-                Some(w) => ngram.push(w),
-                None => return None,
-            }
+        let ngram = Entry::split_ngram_to_words(elems.next().unwrap());
+        if ngram.is_none() {
+            return None;
         }
-        let ngram = ngram.join(" ");
+        let ngram = ngram.unwrap();
 
-        s_iter.next(); // year
-        let match_count = s_iter.next().unwrap().parse::<u128>().unwrap();
+        elems.next(); // Year
+
+        let match_count = elems.next().unwrap().parse::<u128>().unwrap();
 
         Some(Entry { ngram, match_count })
     }
 
-    /// Judges whether the word is valid or not.
-    fn valid_ngram_elem(word: &str) -> Option<String> {
-        match word.starts_with("_") {
-            true => None,
-            false => Some(word.split("_").next().unwrap().to_string()),
+    /// Reads from a parsed line.
+    fn from_parsed_line(line: &str) -> Entry {
+        let mut elems = line.split("\t");
+        let ngram: Vec<String> = elems
+            .next()
+            .unwrap()
+            .split(" ")
+            .map(|s| s.to_string())
+            .collect();
+        let match_count = elems.next().unwrap().parse::<u128>().unwrap();
+
+        Entry { ngram, match_count }
+    }
+
+    /// Extracts valid word.
+    fn valid_ngram_elem(elem: &str) -> Option<String> {
+        if elem.starts_with("_") {
+            None
+        } else {
+            Some(elem.split("_").next().unwrap().to_string())
         }
     }
 
-    fn from_parsed_str(s: &str) -> Entry {
-        let elems: Vec<&str> = s.split("\t").collect();
-        let match_count = elems[1].parse::<u128>().unwrap();
-        Entry {
-            ngram: elems[0].to_string(),
-            match_count,
+    /// Splits s into valid words.
+    fn split_ngram_to_words(s: &str) -> Option<Vec<String>> {
+        let opt_words: Vec<Option<String>> = s
+            .split(" ")
+            .map(|word| Entry::valid_ngram_elem(word))
+            .collect();
+
+        if opt_words.contains(&None) {
+            None
+        } else {
+            Some(opt_words.into_iter().map(|opt| opt.unwrap()).collect())
         }
     }
 }
 
 impl fmt::Display for Entry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}\t{}", self.ngram, self.match_count)
+        write!(f, "{}\t{}", self.ngram.join(" "), self.match_count)
     }
 }
 
-/// EntryCounter counts frequency of n-grams.
-#[derive(Debug)]
+/// EntryCount counts frequency of n-gram entry.
 struct EntryCounter {
-    data: BTreeMap<String, u128>,
+    data: BTreeMap<Vec<String>, u128>,
 }
 
 impl EntryCounter {
-    /// Makes new EntryCounter instance.
     fn new() -> EntryCounter {
         EntryCounter {
             data: BTreeMap::new(),
         }
     }
 
-    /// Adds entry into EntryCounter.
-    fn add(&mut self, entry: Entry) {
+    fn add(&mut self, entry: &Entry) {
         self.data
             .entry(entry.ngram.clone())
             .and_modify(|cnt| *cnt += entry.match_count)
             .or_insert(entry.match_count);
     }
 
-    /// Adds entry from raw str.
-    fn add_from_str(&mut self, s: &str) {
-        match Entry::new(s) {
-            Some(entry) => self.add(entry),
-            None => return,
-        }
-    }
-
-    /// Dumps self.data into w.
-    fn dump(&self, w: &mut io::Write) -> io::Result<()> {
+    fn dump(&self, w: &mut io::Write) {
         for (ngram, match_count) in &self.data {
-            writeln!(w, "{}\t{}", ngram, match_count)?;
+            writeln!(w, "{}\t{}", ngram.join(" "), match_count).unwrap();
         }
-        w.flush()?;
-        Ok(())
     }
 }
 
@@ -252,53 +207,24 @@ mod test {
 
     #[test]
     fn test_valid_ngram_elem() {
-        assert_eq!(Entry::valid_ngram_elem("text"), Some("text".to_string()));
+        assert_eq!(Entry::valid_ngram_elem("word"), Some("word".to_string()));
         assert_eq!(
-            Entry::valid_ngram_elem("text_NOUN"),
-            Some("text".to_string())
+            Entry::valid_ngram_elem("word_NOUN"),
+            Some("word".to_string())
         );
         assert_eq!(Entry::valid_ngram_elem("_NOUN_"), None);
     }
 
     #[test]
-    fn test_entry_new() {
-        let inputs = vec!["a\t2018\t10\t20\n", "a b c\t2018\t10\t20\n"];
-        let results = vec![
-            Some(Entry {
-                ngram: "a".to_string(),
-                match_count: 10,
-            }),
-            Some(Entry {
-                ngram: "a b c".to_string(),
-                match_count: 10,
-            }),
-        ];
-
-        for (input, result) in inputs.into_iter().zip(results) {
-            assert_eq!(Entry::new(input), result);
-        }
-    }
-
-    #[test]
-    fn test_entry_counter() {
-        let inputs = vec![
-            "d e f\t2016\t10\t20",
-            "a b c\t2018\t10\t20",
-            "g h i\t2018\t90\t20",
-            "d e f\t2017\t20\t20",
-            "d e f\t2018\t30\t20",
-        ];
-        let results: Vec<(&str, u128)> = vec![("a b c", 10), ("d e f", 60), ("g h i", 90)];
-
-        let mut counter = EntryCounter::new();
-
-        for input in inputs {
-            counter.add_from_str(&input);
-        }
-
-        for (entry, result) in counter.data.iter().zip(results) {
-            assert_eq!(*entry.0, result.0);
-            assert_eq!(*entry.1, result.1);
-        }
+    fn test_split_ngram_to_words() {
+        assert_eq!(
+            Entry::split_ngram_to_words("a b c"),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        assert_eq!(
+            Entry::split_ngram_to_words("a_NOUN b c"),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        assert_eq!(Entry::split_ngram_to_words("_NOUN_ b c"), None);
     }
 }
