@@ -1,160 +1,52 @@
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use std::collections::BTreeMap;
+use std::error::Error;
 use std::fmt;
-use std::fs;
-use std::fs::File;
 use std::io;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::io::BufWriter;
 use std::io::Write;
-use std::path::Path;
-use std::path::PathBuf;
-
-const READ_LINES_NUM: u32 = 100;
 
 pub fn run() {
-    // let r = read_gz(Path::new("short.txt.gz"));
-    // let mut w = write_gz(Path::new("testtest.txt.gz"));
-    // for line in r.lines() {
-    //     // writeln!(w, "{}", line.unwrap()).unwrap();
-    // }
-
-    let src = Path::new("short.txt.gz");
-    let dst_dir = Path::new("./dst");
-    fs::create_dir(dst_dir).unwrap();
-    count_data(&src, &dst_dir);
+    println!("hello world!")
 }
 
-/// open *.gz file
-fn read_gz(path: &Path) -> BufReader<GzDecoder<BufReader<File>>> {
-    let f = File::open(path).unwrap();
-    let r = BufReader::new(f);
-    let decoder = GzDecoder::new(r);
-    BufReader::new(decoder)
-}
-
-/// create *.gz file
-fn write_gz(path: &Path) -> BufWriter<GzEncoder<BufWriter<File>>> {
-    let f = File::create(path).unwrap();
-    let w = BufWriter::new(f);
-    let encoder = GzEncoder::new(w, Compression::best());
-    BufWriter::new(encoder)
-}
-
-fn count_data(src: &Path, dst_dir: &Path) {
-    let r = read_gz(src);
-
-    let mut entry_counter = EntryCounter::new();
-
-    let mut file_num: u32 = 0;
-
-    let mut lines = r.lines();
-
-    loop {
-        let mut dst_path = dst_dir.to_path_buf();
-        dst_path.push(&format!("{:010}.gz", file_num));
-        let mut w = write_gz(&dst_path);
-
-        for _ in 0..READ_LINES_NUM {
-            match lines.next() {
-                Some(result) => match result {
-                    Ok(line) => match Entry::from_raw_line(&line) {
-                        Some(entry) => entry_counter.add(&entry),
-                        None => continue,
-                    },
-                    Err(err) => panic!(err),
-                },
-                None => {
-                    entry_counter.dump(&mut w);
-                    return;
-                }
-            }
-        }
-
-        entry_counter.dump(&mut w);
-
-        file_num += 1;
-    }
-}
-
-fn merge_two_files(src1: &Path, src2: &Path, dst_dir: &Path) {
-    let r1 = read_gz(src1);
-    let r2 = read_gz(src2);
-
-    let mut lines1 = r1.lines();
-    let mut lines2 = r2.lines();
-
-    let mut w = write_gz(dst_dir);
-
-    let mut line1 = lines1.next();
-    let mut line2 = lines2.next();
-
-    let mut entry1 = Entry::from_raw_line(&line1.unwrap().unwrap());
-    let mut entry2 = Entry::from_raw_line(&line1.unwrap().unwrap());
-
-    loop {
-        if line1.is_none() && line2.is_none() {
-            return;
-        }
-
-        if line2.is_none() {}
-    }
-}
-
-fn dump_line(w: &mut io::Write, line: &str) {}
-
-/// The entry is a struct of each line of data.
-#[derive(Debug)]
+// Entry is a struct of each line of data.
+#[derive(Debug, PartialEq)]
 struct Entry {
     ngram: Vec<String>,
-    match_count: u128,
+    match_count: u64,
+}
+
+// EntryOrd is the result of a comparison between two entries.
+#[derive(Debug, PartialEq)]
+enum EntryOrd {
+    Less,
+    Equal,
+    Grater,
 }
 
 impl Entry {
-    /// Reads from a line of data.
+    // Parses from raw line.
     fn from_raw_line(line: &str) -> Option<Entry> {
-        let mut elems = line.split("\t");
+        let elems: Vec<&str> = line.split("\t").collect();
 
-        let ngram = Entry::split_ngram_to_words(elems.next().unwrap());
+        if elems.len() != 2 {
+            return None;
+        }
+
+        let ngram = Entry::split_ngram_to_words(elems[0]);
         if ngram.is_none() {
             return None;
         }
         let ngram = ngram.unwrap();
 
-        elems.next(); // Year
-
-        let match_count = elems.next().unwrap().parse::<u128>().unwrap();
+        let match_count = elems[1].parse::<u64>();
+        if match_count.is_err() {
+            return None;
+        }
+        let match_count = match_count.unwrap();
 
         Some(Entry { ngram, match_count })
     }
 
-    /// Reads from a parsed line.
-    fn from_parsed_line(line: &str) -> Entry {
-        let mut elems = line.split("\t");
-        let ngram: Vec<String> = elems
-            .next()
-            .unwrap()
-            .split(" ")
-            .map(|s| s.to_string())
-            .collect();
-        let match_count = elems.next().unwrap().parse::<u128>().unwrap();
-
-        Entry { ngram, match_count }
-    }
-
-    /// Extracts valid word.
-    fn valid_ngram_elem(elem: &str) -> Option<String> {
-        if elem.starts_with("_") {
-            None
-        } else {
-            Some(elem.split("_").next().unwrap().to_string())
-        }
-    }
-
-    /// Splits s into valid words.
+    // Splits s into valid words.
     fn split_ngram_to_words(s: &str) -> Option<Vec<String>> {
         let opt_words: Vec<Option<String>> = s
             .split(" ")
@@ -167,6 +59,55 @@ impl Entry {
             Some(opt_words.into_iter().map(|opt| opt.unwrap()).collect())
         }
     }
+
+    // Extracts valid word.
+    fn valid_ngram_elem(word: &str) -> Option<String> {
+        if word.starts_with("_") {
+            None
+        } else {
+            Some(word.split("_").next().unwrap().to_string())
+        }
+    }
+
+    // Parses from sanity line.
+    fn from_parsed_line(line: &str) -> Entry {
+        let mut elems_iter = line.split("\t");
+
+        let ngram: Vec<String> = elems_iter
+            .next()
+            .unwrap()
+            .split(" ")
+            .map(|word| word.to_string())
+            .collect();
+
+        let match_count = elems_iter.next().unwrap().parse::<u64>().unwrap();
+
+        Entry { ngram, match_count }
+    }
+
+    // entry_cmp returns the original result of comparison.
+    fn entry_cmp(&self, other: &Entry) -> EntryOrd {
+        if self.ngram < other.ngram {
+            EntryOrd::Less
+        } else if self.ngram == other.ngram {
+            EntryOrd::Equal
+        } else {
+            EntryOrd::Grater
+        }
+    }
+
+    // merge merges two emtries which have the same entry.
+    fn merge(&self, other: &Entry) -> Entry {
+        Entry {
+            ngram: self.ngram.clone(),
+            match_count: self.match_count + other.match_count,
+        }
+    }
+
+    // dump_to dumps entry to w.
+    fn dump_to(&self, w: &mut Write) -> io::Result<()> {
+        writeln!(w, "{}", self)
+    }
 }
 
 impl fmt::Display for Entry {
@@ -175,56 +116,58 @@ impl fmt::Display for Entry {
     }
 }
 
-/// EntryCount counts frequency of n-gram entry.
-struct EntryCounter {
-    data: BTreeMap<Vec<String>, u128>,
-}
-
-impl EntryCounter {
-    fn new() -> EntryCounter {
-        EntryCounter {
-            data: BTreeMap::new(),
-        }
-    }
-
-    fn add(&mut self, entry: &Entry) {
-        self.data
-            .entry(entry.ngram.clone())
-            .and_modify(|cnt| *cnt += entry.match_count)
-            .or_insert(entry.match_count);
-    }
-
-    fn dump(&self, w: &mut io::Write) {
-        for (ngram, match_count) in &self.data {
-            writeln!(w, "{}\t{}", ngram.join(" "), match_count).unwrap();
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
-    fn test_valid_ngram_elem() {
-        assert_eq!(Entry::valid_ngram_elem("word"), Some("word".to_string()));
-        assert_eq!(
-            Entry::valid_ngram_elem("word_NOUN"),
-            Some("word".to_string())
-        );
-        assert_eq!(Entry::valid_ngram_elem("_NOUN_"), None);
+    fn test_from_raw_line() {
+        let query = vec!["a b\t1", "c_NOUN d\t2", "e_NOUN _f_\t3"];
+        let ans = vec![
+            Some(Entry {
+                ngram: vec!["a".to_string(), "b".to_string()],
+                match_count: 1,
+            }),
+            Some(Entry {
+                ngram: vec!["c".to_string(), "d".to_string()],
+                match_count: 2,
+            }),
+            None,
+        ];
+
+        for (q, a) in query.into_iter().zip(ans.into_iter()) {
+            assert_eq!(Entry::from_raw_line(q), a);
+        }
     }
 
     #[test]
-    fn test_split_ngram_to_words() {
+    fn test_from_parsed_line() {
         assert_eq!(
-            Entry::split_ngram_to_words("a b c"),
-            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
-        );
-        assert_eq!(
-            Entry::split_ngram_to_words("a_NOUN b c"),
-            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
-        );
-        assert_eq!(Entry::split_ngram_to_words("_NOUN_ b c"), None);
+            Entry::from_parsed_line("a b\t1"),
+            Entry {
+                ngram: vec!["a".to_string(), "b".to_string()],
+                match_count: 1
+            }
+        )
+    }
+
+    #[test]
+    fn test_entry_fmt() {
+        assert_eq!(format!("{}", Entry::from_parsed_line("a b\t1")), "a b\t1\n")
+    }
+
+    #[test]
+    fn test_entry_cmp() {
+        let entry = Entry::from_parsed_line("b b\t1");
+        let others = vec![
+            Entry::from_parsed_line("b c\t6"),
+            Entry::from_parsed_line("b b\t5"),
+            Entry::from_parsed_line("a b\t4"),
+        ];
+        let answer = vec![EntryOrd::Less, EntryOrd::Equal, EntryOrd::Grater];
+
+        for (other, ans) in others.into_iter().zip(answer.into_iter()) {
+            assert_eq!(entry.entry_cmp(&other), ans);
+        }
     }
 }
