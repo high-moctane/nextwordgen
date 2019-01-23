@@ -253,10 +253,10 @@ impl Entry {
 
     /// Extracts valid word.
     fn valid_ngram_elem(word: &str) -> Option<String> {
-        if word.starts_with("_") {
+        if word.contains("_") {
             None
         } else {
-            Some(word.split("_").next().unwrap().to_string())
+            Some(word.to_string())
         }
     }
 
@@ -356,10 +356,7 @@ mod test_entry {
                 ngram: vec!["a".to_string(), "b".to_string()],
                 match_count: 10,
             }),
-            Some(Entry {
-                ngram: vec!["c".to_string(), "d".to_string()],
-                match_count: 20,
-            }),
+            None,
             None,
         ];
 
