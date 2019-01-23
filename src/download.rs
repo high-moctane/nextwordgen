@@ -15,8 +15,7 @@ use std::path::Path;
 use std::thread;
 use std::time;
 
-// const READ_LINES_NUM: u32 = 1000000000;
-const READ_LINES_NUM: u32 = 100000;
+const READ_LINES_NUM: u32 = 1000000;
 
 pub fn run() {
     count_data(&Path::new("2gram-wy.txt.gz"), &Path::new("dstdir")).unwrap();
@@ -43,13 +42,13 @@ fn write_gz(path: &Path) -> io::Result<BufWriter<GzEncoder<BufWriter<File>>>> {
 fn count_data(src: &Path, dst_dir: &Path) -> io::Result<()> {
     let r = read_gz(src)?;
 
-    let mut entry_counter = EntryCounter::new();
-
     let mut file_num = 0u32;
 
     let mut lines = r.lines();
 
     loop {
+        let mut entry_counter = EntryCounter::new();
+
         let mut dst_path = dst_dir.to_path_buf();
         dst_path.push(&format!("{:010}.txt.gz", file_num));
 
@@ -170,11 +169,6 @@ fn merge_files(dir: &Path) -> io::Result<()> {
         let src1 = src[0].as_ref().unwrap().path();
         let src2 = src[1].as_ref().unwrap().path();
 
-        // .DS_Store!!!!!!!!!!!!!(´･ω･｀)
-        if !is_valid_gzip_file_name(&src1) || !is_valid_gzip_file_name(&src2) {
-            break;
-        }
-
         let new_number = src1
             .file_name()
             .unwrap()
@@ -199,14 +193,6 @@ fn merge_files(dir: &Path) -> io::Result<()> {
     // short sleep is needed
     thread::sleep(time::Duration::from_millis(100));
     merge_files(dir)
-}
-
-/// .DS_Store!!!!!!!!!!!(´･ω･｀)
-fn is_valid_gzip_file_name(path: &Path) -> bool {
-    match path.extension() {
-        Some(os_str) => os_str.to_str().unwrap() == "gz",
-        None => false,
-    }
 }
 
 type Ngram = Vec<String>;
@@ -364,7 +350,6 @@ mod test_entry {
             "a b\t2019\t10\t1",
             "c_NOUN d\t2019\t20\t1",
             "e_NOUN _f_\t2019\t30\t1",
-            "あ い\t2019\t10\t1",
         ];
         let ans = vec![
             Some(Entry {
@@ -375,7 +360,6 @@ mod test_entry {
                 ngram: vec!["c".to_string(), "d".to_string()],
                 match_count: 20,
             }),
-            None,
             None,
         ];
 
@@ -413,6 +397,16 @@ mod test_entry {
         for (other, ans) in others.into_iter().zip(answer.into_iter()) {
             assert_eq!(entry.entry_cmp(&other), ans);
         }
+    }
+
+    #[test]
+    fn merge() {
+        let ent1 = Entry::from_parsed_line("a b\t1");
+        let ent2 = Entry::from_parsed_line("a b\t3");
+
+        let ans = Entry::from_parsed_line("a b\t4");
+
+        assert_eq!(ent1.merge(&ent2), ans);
     }
 }
 
